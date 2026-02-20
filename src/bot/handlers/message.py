@@ -7,7 +7,6 @@ import structlog
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ...claude.exceptions import ClaudeToolValidationError
 from ...config.settings import Settings
 from ...security.audit import AuditLogger
 from ...security.rate_limiter import RateLimiter
@@ -249,18 +248,6 @@ async def handle_text_message(
                 claude_response.content
             )
 
-        except ClaudeToolValidationError as e:
-            # Tool validation error with detailed instructions
-            logger.error(
-                "Tool validation error",
-                error=str(e),
-                user_id=user_id,
-                blocked_tools=e.blocked_tools,
-            )
-            # Error message already formatted, create FormattedMessage
-            from ..utils.formatting import FormattedMessage
-
-            formatted_messages = [FormattedMessage(str(e), parse_mode="HTML")]
         except Exception as e:
             logger.error("Claude integration failed", error=str(e), user_id=user_id)
             # Format error and create FormattedMessage
