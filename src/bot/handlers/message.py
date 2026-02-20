@@ -88,9 +88,6 @@ def _format_error_message(error_str: str) -> str:
     if "usage limit reached" in error_str.lower():
         # Usage limit error - already user-friendly from integration.py
         return error_str
-    elif "tool not allowed" in error_str.lower():
-        # Tool validation error - already handled in facade.py
-        return error_str
     elif "no conversation found" in error_str.lower():
         return (
             "🔄 <b>Session Not Found</b>\n\n"
