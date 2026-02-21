@@ -321,6 +321,14 @@ class MessageOrchestrator:
             group=10,
         )
 
+        # Voice messages -> Claude
+        app.add_handler(
+            MessageHandler(
+                filters.VOICE, self._inject_deps(self.agentic_voice)
+            ),
+            group=10,
+        )
+
         # Only cd: callbacks (for project selection), scoped by pattern
         app.add_handler(
             CallbackQueryHandler(
@@ -371,6 +379,12 @@ class MessageOrchestrator:
         )
         app.add_handler(
             MessageHandler(filters.PHOTO, self._inject_deps(message.handle_photo)),
+            group=10,
+        )
+        app.add_handler(
+            MessageHandler(
+                filters.VOICE, self._inject_deps(message.handle_voice_message)
+            ),
             group=10,
         )
         app.add_handler(
@@ -1080,6 +1094,160 @@ class MessageOrchestrator:
             await progress_msg.edit_text(_format_error_message(e), parse_mode="HTML")
             logger.error(
                 "Claude photo processing failed", error=str(e), user_id=user_id
+            )
+
+    async def agentic_voice(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Process voice note -> transcribe -> Claude, minimal chrome."""
+        user_id = update.effective_user.id
+
+        features = context.bot_data.get("features")
+        voice_handler = features.get_voice_handler() if features else None
+
+        if not voice_handler:
+            await update.message.reply_text(
+                "Voice message processing is not available. "
+                "Set ENABLE_VOICE_MESSAGES=true and provide OPENAI_API_KEY."
+            )
+            return
+
+        chat = update.message.chat
+        await chat.send_action("typing")
+        progress_msg = await update.message.reply_text("Transcribing voice note...")
+
+        try:
+            # Download voice file
+            voice = update.message.voice
+            file = await voice.get_file()
+            voice_bytes = await file.download_as_bytearray()
+
+            # Transcribe
+            processed_voice = await voice_handler.transcribe_voice(
+                bytes(voice_bytes), voice.duration
+            )
+
+            # Show transcription to user
+            await progress_msg.edit_text(
+                f"\U0001f399 Transcribed: \"{processed_voice.transcription}\"\n\n"
+                "Processing with Claude..."
+            )
+
+            # Send to Claude
+            claude_integration = context.bot_data.get("claude_integration")
+            if not claude_integration:
+                await progress_msg.edit_text(
+                    "Claude integration not available. Check configuration."
+                )
+                return
+
+            current_dir = context.user_data.get(
+                "current_directory", self.settings.approved_directory
+            )
+            session_id = context.user_data.get("claude_session_id")
+            force_new = bool(context.user_data.get("force_new_session"))
+
+            verbose_level = self._get_verbose_level(context)
+            tool_log: List[Dict[str, Any]] = []
+            on_stream = self._make_stream_callback(
+                verbose_level, progress_msg, tool_log, time.time()
+            )
+
+            heartbeat = self._start_typing_heartbeat(chat)
+            try:
+                claude_response = await claude_integration.run_command(
+                    prompt=processed_voice.prompt,
+                    working_directory=current_dir,
+                    user_id=user_id,
+                    session_id=session_id,
+                    on_stream=on_stream,
+                    force_new=force_new,
+                )
+            finally:
+                heartbeat.cancel()
+
+            if force_new:
+                context.user_data["force_new_session"] = False
+
+            context.user_data["claude_session_id"] = claude_response.session_id
+
+            from .handlers.message import _update_working_directory_from_claude_response
+
+            _update_working_directory_from_claude_response(
+                claude_response, context, self.settings, user_id
+            )
+
+            from .utils.formatting import ResponseFormatter
+
+            formatter = ResponseFormatter(self.settings)
+            formatted_messages = formatter.format_claude_response(
+                claude_response.content
+            )
+
+            await progress_msg.delete()
+
+            # Send text response(s)
+            for i, message in enumerate(formatted_messages):
+                if not message.text or not message.text.strip():
+                    continue
+                try:
+                    await update.message.reply_text(
+                        message.text,
+                        parse_mode=message.parse_mode,
+                        reply_markup=None,
+                        reply_to_message_id=(
+                            update.message.message_id if i == 0 else None
+                        ),
+                    )
+                    if i < len(formatted_messages) - 1:
+                        await asyncio.sleep(0.5)
+                except Exception as send_err:
+                    logger.warning(
+                        "Failed to send HTML response, retrying as plain text",
+                        error=str(send_err),
+                    )
+                    try:
+                        await update.message.reply_text(
+                            message.text,
+                            reply_markup=None,
+                            reply_to_message_id=(
+                                update.message.message_id if i == 0 else None
+                            ),
+                        )
+                    except Exception:
+                        pass
+
+            # Optional voice response
+            if voice_handler.enable_voice_response:
+                try:
+                    voice_response = await voice_handler.generate_voice_response(
+                        claude_response.content
+                    )
+                    if voice_response:
+                        import io
+
+                        audio_io = io.BytesIO(voice_response.audio_data)
+                        audio_io.name = "response.ogg"
+                        await update.message.reply_voice(
+                            voice=audio_io,
+                            reply_to_message_id=update.message.message_id,
+                        )
+                except Exception as tts_err:
+                    logger.warning(
+                        "TTS voice response failed, text already sent",
+                        error=str(tts_err),
+                    )
+
+        except Exception as e:
+            from .handlers.message import _format_error_message
+
+            await progress_msg.edit_text(
+                _format_error_message(e), parse_mode="HTML"
+            )
+            logger.error(
+                "Claude voice processing failed",
+                error=str(e),
+                user_id=user_id,
             )
 
     async def agentic_repo(

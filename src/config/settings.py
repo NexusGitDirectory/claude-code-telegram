@@ -165,6 +165,41 @@ class Settings(BaseSettings):
         description="Conversational agentic mode (default) vs classic command mode",
     )
 
+    # Voice message settings
+    enable_voice_messages: bool = Field(
+        False, description="Enable voice note transcription via OpenAI Whisper"
+    )
+    enable_voice_response: bool = Field(
+        False, description="Enable voice response via OpenAI TTS"
+    )
+    openai_api_key: Optional[SecretStr] = Field(
+        None, description="OpenAI API key for voice features (Whisper + TTS)"
+    )
+    voice_max_duration_seconds: int = Field(
+        300,
+        description="Maximum voice note duration in seconds",
+        ge=10,
+        le=3600,
+    )
+    voice_tts_voice: str = Field(
+        "nova",
+        description="OpenAI TTS voice (alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer)",
+    )
+    voice_tts_model: str = Field(
+        "gpt-4o-mini-tts",
+        description="OpenAI TTS model",
+    )
+    voice_stt_model: str = Field(
+        "whisper-1",
+        description="OpenAI STT model (whisper-1 or gpt-4o-mini-transcribe)",
+    )
+    voice_response_max_chars: int = Field(
+        4096,
+        description="Maximum response length for voice output (longer responses are text-only)",
+        ge=100,
+        le=10000,
+    )
+
     # Output verbosity (0=quiet, 1=normal, 2=detailed)
     verbose_level: int = Field(
         1,
@@ -361,6 +396,12 @@ class Settings(BaseSettings):
         if self.enable_mcp and not self.mcp_config_path:
             raise ValueError("mcp_config_path required when enable_mcp is True")
 
+        # Check voice requirements
+        if self.enable_voice_messages and not self.openai_api_key:
+            raise ValueError(
+                "openai_api_key required when enable_voice_messages is True"
+            )
+
         if self.enable_project_threads:
             if (
                 self.project_threads_mode == "group"
@@ -408,5 +449,14 @@ class Settings(BaseSettings):
         return (
             self.anthropic_api_key.get_secret_value()
             if self.anthropic_api_key
+            else None
+        )
+
+    @property
+    def openai_api_key_str(self) -> Optional[str]:
+        """Get OpenAI API key as string."""
+        return (
+            self.openai_api_key.get_secret_value()
+            if self.openai_api_key
             else None
         )

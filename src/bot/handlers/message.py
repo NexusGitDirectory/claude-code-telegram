@@ -897,6 +897,140 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
 
 
+async def handle_voice_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle voice note uploads (classic mode)."""
+    user_id = update.effective_user.id
+    settings: Settings = context.bot_data["settings"]
+
+    features = context.bot_data.get("features")
+    voice_handler = features.get_voice_handler() if features else None
+
+    if not voice_handler:
+        await update.message.reply_text(
+            "\U0001f3a4 <b>Voice Messages</b>\n\n"
+            "Voice message processing is not enabled.\n\n"
+            "Set <code>ENABLE_VOICE_MESSAGES=true</code> and provide "
+            "<code>OPENAI_API_KEY</code> in the bot configuration.",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        # Send progress indicator
+        progress_msg = await update.message.reply_text(
+            "\U0001f3a4 Transcribing voice note...", parse_mode="HTML"
+        )
+
+        # Download voice file
+        voice = update.message.voice
+        file = await voice.get_file()
+        voice_bytes = await file.download_as_bytearray()
+
+        # Transcribe
+        processed_voice = await voice_handler.transcribe_voice(
+            bytes(voice_bytes), voice.duration
+        )
+
+        # Show transcription
+        await progress_msg.edit_text(
+            f'\U0001f399 Transcribed: "{processed_voice.transcription}"\n\n'
+            "\U0001f916 Processing with Claude...",
+            parse_mode="HTML",
+        )
+
+        # Get Claude integration
+        claude_integration = context.bot_data.get("claude_integration")
+        if not claude_integration:
+            await progress_msg.edit_text(
+                "\u274c <b>Claude integration not available</b>\n\n"
+                "The Claude Code integration is not properly configured.",
+                parse_mode="HTML",
+            )
+            return
+
+        # Get current directory and session
+        current_dir = context.user_data.get(
+            "current_directory", settings.approved_directory
+        )
+        session_id = context.user_data.get("claude_session_id")
+
+        # Process with Claude
+        try:
+            claude_response = await claude_integration.run_command(
+                prompt=processed_voice.prompt,
+                working_directory=current_dir,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+            # Update session ID
+            context.user_data["claude_session_id"] = claude_response.session_id
+
+            # Format and send response
+            from ..utils.formatting import ResponseFormatter
+
+            formatter = ResponseFormatter(settings)
+            formatted_messages = formatter.format_claude_response(
+                claude_response.content
+            )
+
+            # Delete progress message
+            await progress_msg.delete()
+
+            # Send text responses
+            for i, message in enumerate(formatted_messages):
+                await update.message.reply_text(
+                    message.text,
+                    parse_mode=message.parse_mode,
+                    reply_markup=message.reply_markup,
+                    reply_to_message_id=(
+                        update.message.message_id if i == 0 else None
+                    ),
+                )
+                if i < len(formatted_messages) - 1:
+                    await asyncio.sleep(0.5)
+
+            # Optional voice response
+            if voice_handler.enable_voice_response:
+                try:
+                    voice_response = await voice_handler.generate_voice_response(
+                        claude_response.content
+                    )
+                    if voice_response:
+                        import io
+
+                        audio_io = io.BytesIO(voice_response.audio_data)
+                        audio_io.name = "response.ogg"
+                        await update.message.reply_voice(
+                            voice=audio_io,
+                            reply_to_message_id=update.message.message_id,
+                        )
+                except Exception as tts_err:
+                    logger.warning(
+                        "TTS voice response failed, text already sent",
+                        error=str(tts_err),
+                    )
+
+        except Exception as e:
+            await progress_msg.edit_text(
+                _format_error_message(e), parse_mode="HTML"
+            )
+            logger.error(
+                "Claude voice processing failed",
+                error=str(e),
+                user_id=user_id,
+            )
+
+    except Exception as e:
+        logger.error("Voice processing failed", error=str(e), user_id=user_id)
+        await update.message.reply_text(
+            _format_error_message(e),
+            parse_mode="HTML",
+        )
+
+
 def _estimate_text_processing_cost(text: str) -> float:
     """Estimate cost for processing text message."""
     # Base cost
