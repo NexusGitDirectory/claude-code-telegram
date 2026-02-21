@@ -3,10 +3,16 @@
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Prevent Claude CLI nesting detection — the SDK spawns claude as a subprocess
+# and passes os.environ, so these vars must be unset before any claude invocation.
+os.environ.pop("CLAUDECODE", None)
+os.environ.pop("CLAUDE_CODE_ENTRYPOINT", None)
 
 import structlog
 

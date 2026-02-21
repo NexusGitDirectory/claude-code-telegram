@@ -170,12 +170,20 @@ class ClaudeSDKManager:
         try:
             # Build Claude Agent options
             cli_path = find_claude_cli(self.config.claude_cli_path)
+            # Capture stderr so we can see actual Claude CLI errors
+            stderr_lines: List[str] = []
+
+            def _stderr_callback(line: str) -> None:
+                stderr_lines.append(line)
+                logger.debug("Claude stderr", line=line)
+
             options = ClaudeAgentOptions(
                 max_turns=self.config.claude_max_turns,
                 cwd=str(working_directory),
                 allowed_tools=self.config.claude_allowed_tools,
                 disallowed_tools=self.config.claude_disallowed_tools,
                 cli_path=cli_path,
+                stderr=_stderr_callback,
                 sandbox={
                     "enabled": self.config.sandbox_enabled,
                     "autoAllowBashIfSandboxed": True,
