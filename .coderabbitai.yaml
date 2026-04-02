@@ -1,0 +1,15 @@
+# CodeRabbit configuration — suppress reviews on third-party and auto-generated files
+reviews:
+  path_filters:
+    - "!.claude/agents/**"
+    - "!.claude/CLAUDE.md"
+    - "!.claude/skills/omc-reference/**"
+    - "!.claude/hooks/**"
+    - "!.claude/plugins/**"
+    - "!.claude/settings.json"
+    - "!**/.playwright-mcp/**"
+    - "!**/node_modules/**"
+    - "!**/__pycache__/**"
+  auto_review:
+    enabled: true
+    drafts: false
